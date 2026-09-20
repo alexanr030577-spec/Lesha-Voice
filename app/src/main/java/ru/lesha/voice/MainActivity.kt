@@ -11,8 +11,6 @@ import android.speech.tts.TextToSpeech
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import android.content.Intent
 import java.util.Locale
 
@@ -31,8 +29,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
  }
  override fun onInit(s:Int){ if(s==TextToSpeech.SUCCESS) tts?.language=Locale("ru","RU") }
  private fun start(){
-  if(ContextCompat.checkSelfPermission(this,Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
-   ActivityCompat.requestPermissions(this,arrayOf(Manifest.permission.RECORD_AUDIO),7); return
+  if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
+   requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),7); return
   }
   if(!SpeechRecognizer.isRecognitionAvailable(this)){status.text="Распознавание речи недоступно";return}
   listening=true
