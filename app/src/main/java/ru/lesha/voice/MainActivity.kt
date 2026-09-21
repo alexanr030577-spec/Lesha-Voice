@@ -2,62 +2,177 @@ package ru.lesha.voice
 
 import android.Manifest
 import android.app.Activity
-import android.content.pm.PackageManager
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.app.NotificationManager
 import android.content.Intent
-import java.util.Locale
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.text.InputType
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 
-class MainActivity : Activity(), TextToSpeech.OnInitListener {
- private lateinit var status: TextView
- private var sr: SpeechRecognizer? = null
- private var tts: TextToSpeech? = null
- private var listening = false
+class MainActivity : Activity() {
+    private lateinit var status: TextView
+    private lateinit var point: TextView
+    private lateinit var interval: EditText
+    private lateinit var access: Button
+    private lateinit var select: Button
+    private lateinit var start: Button
+    private val stateChanged: () -> Unit = { refresh() }
 
- override fun onCreate(b: Bundle?) {
-  super.onCreate(b); tts=TextToSpeech(this,this)
-  val box=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(48,100,48,48)}
-  status=TextView(this).apply{text="Готова услышать «Лёша»";textSize=24f}
-  val btn=Button(this).apply{text="СЛУШАТЬ";setOnClickListener{ if(listening) stop() else start() }}
-  box.addView(status);box.addView(btn);setContentView(box)
- }
- override fun onInit(s:Int){ if(s==TextToSpeech.SUCCESS) tts?.language=Locale("ru","RU") }
- private fun start(){
-  if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
-   requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO),7); return
-  }
-  if(!SpeechRecognizer.isRecognitionAvailable(this)){status.text="Распознавание речи недоступно";return}
-  listening=true
-  sr=SpeechRecognizer.createSpeechRecognizer(this).also{ r->
-   r.setRecognitionListener(object:RecognitionListener{
-    override fun onResults(b:Bundle){ check(b); restart() }
-    override fun onPartialResults(b:Bundle){ check(b) }
-    override fun onError(e:Int){ if(listening) restart() }
-    override fun onReadyForSpeech(p:Bundle?){}; override fun onBeginningOfSpeech(){}
-    override fun onRmsChanged(v:Float){}; override fun onBufferReceived(b:ByteArray?){}
-    override fun onEndOfSpeech(){}; override fun onEvent(t:Int,p:Bundle?){}
-   })
-  }; listen()
- }
- private fun intent()=Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply{
-  putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-  putExtra(RecognizerIntent.EXTRA_LANGUAGE,"ru-RU"); putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS,true)
- }
- private fun listen(){ status.text="Слушаю… скажи «Лёша»"; sr?.startListening(intent()) }
- private fun check(b:Bundle){
-  val xs=b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?:return
-  if(xs.any{it.lowercase(Locale("ru","RU")).contains("лёша") || it.lowercase(Locale("ru","RU")).contains("леша")}){
-   status.text="Услышала: Лёша"; tts?.speak("Да?",TextToSpeech.QUEUE_FLUSH,null,"yes")
-  }
- }
- private fun restart(){ if(!listening)return; status.postDelayed({if(listening) try{sr?.startListening(intent())}catch(_:Exception){}},350) }
- private fun stop(){listening=false;sr?.cancel();status.text="Остановлено"}
- override fun onRequestPermissionsResult(r:Int,p:Array<out String>,g:IntArray){super.onRequestPermissionsResult(r,p,g);if(r==7&&g.firstOrNull()==PackageManager.PERMISSION_GRANTED)start()}
- override fun onDestroy(){listening=false;sr?.destroy();tts?.shutdown();super.onDestroy()}
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(24), dp(24), dp(24))
+        }
+        val scroll = ScrollView(this).apply { addView(box) }
+        scroll.setOnApplyWindowInsetsListener { view, insets ->
+            view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
+                insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+            insets
+        }
+        fun label(text: String, size: Float = 18f) = TextView(this).apply {
+            this.text = text
+            textSize = size
+            setPadding(0, dp(8), 0, dp(8))
+            box.addView(this)
+        }
+        fun button(text: String, action: () -> Unit) = Button(this).apply {
+            this.text = text
+            minHeight = dp(56)
+            setOnClickListener { action() }
+            box.addView(this)
+        }
+        label("Лёша · кликер", 28f)
+        label("Кликает в выбранной точке. Скажите «Лёша» — клики остановятся. Голос может быть любым.")
+        status = label(SessionState.message, 22f)
+        access = button("1. Разрешить нажатия") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+        label("В специальных возможностях включите «Лёша · нажатия». Сервис выполняет нажатия в выбранной вами точке и не читает содержимое экрана.", 16f)
+        point = label("")
+        select = button("2. Выбрать точку") {
+            val service = ClickAccessibilityService.instance
+            if (service == null) {
+                status.text = "Сначала разрешите нажатия в специальных возможностях"
+            } else {
+                service.showPointPicker()
+            }
+        }
+        label("Интервал между нажатиями, мс (100–60 000)")
+        interval = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+            setText(getSharedPreferences("clicker", MODE_PRIVATE).getLong("interval", 1000).toString())
+            contentDescription = "Интервал между нажатиями в миллисекундах"
+            box.addView(this)
+        }
+        start = button("3. СТАРТ") { requestStart() }
+        button("STOP") { VoiceClickService.stop("Остановлено кнопкой STOP") }
+        label("После старта есть 3 секунды, чтобы открыть нужный экран. STOP также доступен в уведомлении. Если прослушивание прервётся, клики приостановятся.", 16f)
+        label("Нужен системный сервис распознавания русской речи; ему может потребоваться интернет. После распознавания слова новые клики сразу отменяются.", 16f)
+        setContentView(scroll)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        SessionState.listeners.add(stateChanged)
+        refresh()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refresh()
+    }
+
+    override fun onStop() {
+        SessionState.listeners.remove(stateChanged)
+        super.onStop()
+    }
+
+    private fun refresh() {
+        status.text = SessionState.message
+        val prefs = getSharedPreferences("clicker", MODE_PRIVATE)
+        point.text = if (prefs.contains("x")) "Точка: ${prefs.getInt("x", 0)}, ${prefs.getInt("y", 0)}"
+            else "Точка пока не выбрана"
+        access.text = if (ClickAccessibilityService.instance != null) "Нажатия разрешены ✓"
+            else "1. Разрешить нажатия"
+        start.isEnabled = !SessionState.active
+        select.isEnabled = !SessionState.active
+        interval.isEnabled = !SessionState.active
+        access.isEnabled = !SessionState.active
+    }
+
+    private fun requestStart() {
+        if (SessionState.active) return
+        val service = ClickAccessibilityService.instance
+        if (service == null) {
+            status.text = "Сначала разрешите нажатия"
+            return
+        }
+        if (!service.hasValidPoint()) {
+            status.text = "Выберите точку для текущего положения экрана"
+            return
+        }
+        val delay = interval.text.toString().toLongOrNull()
+        if (delay == null || delay !in 100L..60_000L) {
+            interval.error = "Введите число от 100 до 60 000"
+            return
+        }
+        getSharedPreferences("clicker", MODE_PRIVATE).edit().putLong("interval", delay).apply()
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MICROPHONE_REQUEST)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            if (!getPreferences(MODE_PRIVATE).getBoolean("notificationAsked", false) ||
+                shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                getPreferences(MODE_PRIVATE).edit().putBoolean("notificationAsked", true).apply()
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
+            } else {
+                openNotificationSettings()
+            }
+            return
+        }
+        val notifications = getSystemService(NotificationManager::class.java)
+        if (!notifications.areNotificationsEnabled() ||
+            notifications.getNotificationChannel("voice_stop")?.importance == NotificationManager.IMPORTANCE_NONE) {
+            openNotificationSettings()
+            return
+        }
+        service.hidePointPicker()
+        try {
+            VoiceClickService.start(this)
+        } catch (_: RuntimeException) {
+            SessionState.update(false, "Не удалось запустить микрофон. Откройте приложение и попробуйте снова.")
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, results)
+        when (requestCode) {
+            MICROPHONE_REQUEST -> if (results.firstOrNull() == PackageManager.PERMISSION_GRANTED) requestStart()
+                else status.text = "Для голосового STOP разрешите микрофон"
+            NOTIFICATION_REQUEST -> if (results.firstOrNull() == PackageManager.PERMISSION_GRANTED) requestStart()
+                else status.text = "Разрешите уведомления, чтобы кнопка STOP была доступна поверх работы в других приложениях"
+        }
+    }
+
+    private fun openNotificationSettings() {
+        status.text = "Разрешите уведомления для кнопки STOP, затем нажмите СТАРТ"
+        startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+    }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private const val MICROPHONE_REQUEST = 7
+        private const val NOTIFICATION_REQUEST = 8
+    }
 }

@@ -2,6 +2,7 @@ name: Build APK
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 jobs:
   build:
@@ -15,7 +16,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle assembleDebug
+      - run: gradle testDebugUnitTest lintDebug assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: Lesha-Voice-debug
